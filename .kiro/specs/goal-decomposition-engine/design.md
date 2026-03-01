@@ -191,45 +191,57 @@ interface CompanyContext {
 
 A property is a characteristic or behavior that should hold true across all valid executions of a system—essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.
 
-### Property 1: Input Validation Rejects Empty Goals
-*For any* input request, if the goal field is missing, empty, or contains only whitespace, the system should return a 400 error with a descriptive message without invoking Nova.
-**Validates: Requirements TBD**
+### Property 1: Invalid Input Rejection
+*For any* input request where the goal field is missing, empty, or contains only whitespace characters, the system should return a 400 error with a descriptive message without invoking Nova.
+**Validates: Requirements 1.2, 1.3, 8.2**
 
-### Property 2: Objective Count Invariant
-*For any* valid Nova response that passes validation, the output should contain exactly 3 objectives.
-**Validates: Requirements TBD**
+### Property 2: Valid Input Acceptance
+*For any* non-empty goal string (including those with special characters, Unicode, or exceeding 1000 characters), the system should accept and process the input without rejection or truncation.
+**Validates: Requirements 1.1, 1.4, 1.5**
 
-### Property 3: Required Fields Completeness
-*For any* objective in a validated response, all required fields (title, description, successThreshold, requiredSignals, strategicWhy) should be non-empty strings or non-empty arrays.
-**Validates: Requirements TBD**
-
-### Property 4: Signal Array Non-Empty
-*For any* objective in a validated response, the requiredSignals array should contain at least one signal string.
-**Validates: Requirements TBD**
-
-### Property 5: Context Retrieval Graceful Degradation
+### Property 3: Context Retrieval Graceful Degradation
 *For any* Bedrock Knowledge Base retrieval failure, the system should log the error and continue with empty context rather than failing the entire request.
-**Validates: Requirements TBD**
+**Validates: Requirements 2.3, 7.2**
 
-### Property 6: Nova API Failure Handling
-*For any* Nova API failure (timeout, rate limit, service error), the system should log the error and return a 500 response with a user-friendly message.
-**Validates: Requirements TBD**
-
-### Property 7: Invalid JSON Handling
-*For any* Nova response that is not valid JSON, the validator should throw an error that is caught by the handler and returned as a 500 response with appropriate error details.
-**Validates: Requirements TBD**
-
-### Property 8: Schema Validation Failure Handling
-*For any* Nova response that is valid JSON but fails schema validation (missing fields, wrong types, incorrect array lengths), the validator should throw an error with details about which fields are invalid.
-**Validates: Requirements TBD**
-
-### Property 9: Prompt Context Inclusion
+### Property 4: Context Inclusion in Prompt
 *For any* successful context retrieval, the prompt sent to Nova should include all three context components (recentMetrics, historicalGoals, companyProfile) in the structured format.
-**Validates: Requirements TBD**
+**Validates: Requirements 2.5, 3.1**
 
-### Property 10: Response Structure Consistency
-*For any* successful decomposition, the response structure should match the defined TypeScript interface exactly, with no additional or missing fields at the top level.
-**Validates: Requirements TBD**
+### Property 5: Objective Count Invariant
+*For any* Nova response that passes validation, the output should contain exactly 3 objectives, rejecting responses with fewer or more objectives.
+**Validates: Requirements 3.3, 4.3, 4.4**
+
+### Property 6: Required Fields Completeness
+*For any* objective in a validated response, all required fields (title, description, successThreshold, requiredSignals, strategicWhy) should be non-empty strings, and requiredSignals should be a non-empty array.
+**Validates: Requirements 4.5, 4.6**
+
+### Property 7: Invalid JSON Rejection
+*For any* Nova response that is not valid JSON, the validator should throw an error that is caught by the handler and returned as a 500 response with appropriate error details.
+**Validates: Requirements 4.2, 7.4**
+
+### Property 8: Schema Validation Enforcement
+*For any* Nova response that is valid JSON but fails schema validation (missing fields, wrong types, incorrect array lengths), the validator should throw an error with details about which fields are invalid.
+**Validates: Requirements 4.1, 4.5, 7.4**
+
+### Property 9: Nova API Failure Handling
+*For any* Nova API failure (timeout, rate limit, service error), the system should log the error and return a 500 response with a user-friendly message.
+**Validates: Requirements 3.4, 3.5, 7.3**
+
+### Property 10: Successful Response Format
+*For any* successful decomposition, the response should have a 200 status code, application/json Content-Type header, and a body matching the Decomposition_Response interface exactly.
+**Validates: Requirements 4.7, 8.3, 8.6**
+
+### Property 11: Error Logging Completeness
+*For any* error that occurs (AWS SDK failures, Nova failures, validation failures, unexpected errors), the system should log the error type, message, and stack trace before returning an error response.
+**Validates: Requirements 7.1, 7.5, 11.6**
+
+### Property 12: Request Logging
+*For any* request received, the system should log the incoming goal string (truncated if necessary), and for any successful request, should log the total execution time.
+**Validates: Requirements 11.1, 11.7**
+
+### Property 13: Stateless Request Handling
+*For any* sequence of requests, each request should be processed independently without maintaining session state, and concurrent requests should not interfere with each other.
+**Validates: Requirements 10.1, 10.2, 10.3, 10.4**
 
 ## Error Handling
 
