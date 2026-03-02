@@ -71,3 +71,10 @@ export function getLambdaConfig(): LambdaConfig {
     VALIDATION_TIMEOUT_MS: parseInt(process.env.VALIDATION_TIMEOUT_MS || '5000', 10)
   };
 }
+
+/**
+ * Alias for getLambdaConfig for backward compatibility
+ */
+export function getConfig(): LambdaConfig {
+  return getLambdaConfig();
+}

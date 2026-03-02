@@ -33,6 +33,10 @@ export async function encryptCredential(
       error: error instanceof Error ? error.message : String(error),
       keyId,
     });
+    // Re-throw the original error if it's already a specific error message
+    if (error instanceof Error && error.message === "KMS encryption returned no ciphertext") {
+      throw error;
+    }
     throw new Error("Failed to encrypt credential");
   }
 }
@@ -69,6 +73,10 @@ export async function decryptCredential(
     console.error("KMS decryption failed:", {
       error: error instanceof Error ? error.message : String(error),
     });
+    // Re-throw the original error if it's already a specific error message
+    if (error instanceof Error && error.message === "KMS decryption returned no plaintext") {
+      throw error;
+    }
     throw new Error("Failed to decrypt credential");
   }
 }
