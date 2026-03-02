@@ -16,45 +16,59 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
 
 - [x] 2. Implement data fetching layer
   - [x] 2.1 Create HubSpot API client
-    - Write `fetchHubSpotCompanies(limit: number): Promise<HubSpotCompany[]>` function
+    - Write `fetchHubSpotCompanies(userId: string, limit: number): Promise<HubSpotCompany[]>` function
+    - Integrate with credential vault using getServiceCredentials(userId, 'hubspot')
+    - Use OAuth access tokens with automatic refresh via credential vault
     - Implement pagination handling for large datasets
     - Implement retry logic with exponential backoff (3 attempts)
     - Parse API response into HubSpotCompany interface
     - Handle rate limiting with 1-second delays between batches (100 companies per batch)
     - _Requirements: 1.1, 1.4_
+    - _Bugfix: vault-integration-data-fetching (completed)_
   
   - [x] 2.2 Create Mixpanel API client
-    - Write `fetchMixpanelCohorts(companyIds: string[]): Promise<MixpanelCohort[]>` function
+    - Write `fetchMixpanelCohorts(userId: string, companyIds: string[]): Promise<MixpanelCohort[]>` function
+    - Integrate with credential vault using getServiceCredentials(userId, 'mixpanel')
+    - Use service account credentials (username + secret) with Basic auth
     - Query Mixpanel for 'Aha! Moment' event counts per company
     - Calculate 30-day retention rate for each company
     - Implement batch processing (50 companies per batch, 500ms delay)
     - Handle missing data gracefully (return null for unavailable companies)
     - _Requirements: 1.2, 1.4_
+    - _Bugfix: vault-integration-data-fetching (completed)_
   
   - [x] 2.3 Create Stripe API client
-    - Write `fetchStripeCustomers(companyIds: string[]): Promise<StripeCustomer[]>` function
+    - Write `fetchStripeCustomers(userId: string, companyIds: string[]): Promise<StripeCustomer[]>` function
+    - Integrate with credential vault using getServiceCredentials(userId, 'stripe')
+    - Use encrypted API keys retrieved from vault
     - Retrieve subscription status and payment history
     - Identify churn signals (cancelled subscriptions, failed payments)
     - Retrieve MRR for each customer
     - Implement batch processing (100 customers per batch, 1-second delay)
     - Handle missing data gracefully (return null for unavailable companies)
     - _Requirements: 1.3, 1.4_
+    - _Bugfix: vault-integration-data-fetching (completed)_
   
   - [x] 2.4 Implement error handling for API failures
     - Wrap all API calls in try-catch blocks
     - Log errors with full context (API name, error message, retry attempt)
+    - Handle credential retrieval failures (service not connected)
     - Abort analysis if HubSpot fails after all retries
     - Continue with null values if Mixpanel or Stripe fail
     - Track data completeness metrics
     - _Requirements: 10.1, 10.2_
+    - _Bugfix: vault-integration-data-fetching (completed)_
   
   - [x] 2.5 Write unit tests for data fetching
     - Test successful API calls with mock responses
+    - Test credential vault integration with mocked getServiceCredentials
     - Test retry logic for transient failures
     - Test batch processing with pagination
     - Test rate limiting delays
     - Test graceful degradation for Mixpanel/Stripe failures
+    - Test credential retrieval error handling
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 10.1, 10.2_
+    - _Bugfix: vault-integration-data-fetching (completed)_
 
 - [x] 3. Implement data correlation engine
   - [x] 3.1 Create correlation function
@@ -208,7 +222,7 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - _Requirements: 5.1, 5.2, 5.3_
 
 - [ ] 9. Implement trait analysis engine
-  - [ ] 9.1 Create prompt construction function
+  - [x] 9.1 Create prompt construction function
     - Write `constructTraitAnalysisPrompt(topCustomers: MaskedCustomer[], previousICP: ICPProfile | null): string` function
     - Include masked customer data as JSON array
     - Include previous ICP profile if available
@@ -217,7 +231,7 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Specify JSON output format matching TraitAnalysisOutput interface
     - _Requirements: 6.1, 6.2_
   
-  - [ ] 9.2 Implement Nova Lite invocation
+  - [-] 9.2 Implement Nova Lite invocation
     - Write `analyzeTraits(topCustomers: MaskedCustomer[], previousICP: ICPProfile | null): Promise<TraitAnalysisOutput>` function
     - Configure BedrockRuntimeClient with region from environment
     - Use InvokeModelCommand with Amazon Nova Lite model ID
@@ -225,7 +239,7 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Implement retry logic (once after 5-second delay)
     - _Requirements: 6.1, 6.3_
   
-  - [ ] 9.3 Implement fallback heuristic analysis
+  - [x] 9.3 Implement fallback heuristic analysis
     - Write `fallbackTraitAnalysis(topCustomers: MaskedCustomer[]): TraitAnalysisOutput` function
     - Calculate mode for industry and region
     - Calculate median for size range
@@ -233,7 +247,7 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Use if Nova Lite fails after retry
     - _Requirements: 6.4, 10.4_
   
-  - [ ] 9.4 Implement confidence score handling
+  - [x] 9.4 Implement confidence score handling
     - Check if confidence score < 50
     - Flag analysis as uncertain if low confidence
     - Log low confidence warnings
@@ -246,7 +260,7 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Test that identical masked customers produce semantically similar traits
     - Use mocked LLM responses for deterministic testing
   
-  - [ ] 9.6 Write unit tests for trait analysis
+  - [x] 9.6 Write unit tests for trait analysis
     - Test prompt construction with and without previous ICP
     - Test Nova Lite invocation with mock responses
     - Test fallback analysis logic
@@ -254,13 +268,13 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Test retry logic for API failures
     - _Requirements: 6.1, 6.2, 6.3, 6.4_
 
-- [ ] 10. Checkpoint - Ensure masking and trait analysis tests pass
+- [x] 10. Checkpoint - Ensure masking and trait analysis tests pass
   - Run all unit tests and property tests for masking and trait analysis
   - Verify PII detection works correctly
   - Ensure all tests pass, ask the user if questions arise
 
-- [ ] 11. Implement Knowledge Base updater
-  - [ ] 11.1 Create ICP profile formatting function
+- [x] 11. Implement Knowledge Base updater
+  - [x] 11.1 Create ICP profile formatting function
     - Write `formatICPProfile(profile: ICPProfile): string` function
     - Format as markdown with metadata header (version, timestamp)
     - Format traits as bullet lists
@@ -268,14 +282,14 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Include confidence score and sample size
     - _Requirements: 7.1, 7.3_
   
-  - [ ] 11.2 Implement version management
+  - [x] 11.2 Implement version management
     - Write `getLatestICPVersion(knowledgeBaseId: string): Promise<number>` function
     - Read previous ICP profile from Knowledge Base
     - Extract version number
     - Return 0 if no previous profile exists
     - _Requirements: 7.2_
   
-  - [ ] 11.3 Create Knowledge Base update function
+  - [x] 11.3 Create Knowledge Base update function
     - Write `updateICPProfile(profile: ICPProfile, knowledgeBaseId: string): Promise<void>` function
     - Format profile as markdown
     - Write to `icp_profile.md` in Knowledge Base
@@ -289,15 +303,15 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Test that version numbers are strictly monotonically increasing
     - Test that no gaps or duplicates exist in version sequence
   
-  - [ ] 11.5 Write unit tests for Knowledge Base updates
+  - [x] 11.5 Write unit tests for Knowledge Base updates
     - Test profile formatting with various inputs
     - Test version increment logic
     - Test retry logic for API failures
     - Test markdown formatting correctness
     - _Requirements: 7.1, 7.2, 7.3, 10.5_
 
-- [ ] 12. Implement analysis history store
-  - [ ] 12.1 Create DynamoDB client wrapper
+- [x] 12. Implement analysis history store
+  - [x] 12.1 Create DynamoDB client wrapper
     - Write `storeAnalysisRecord(record: ICPAnalysisRecord): Promise<void>` function
     - Use ISO timestamp as partition key
     - Store complete analysis record with all fields
@@ -305,7 +319,7 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Log error but continue if retry fails (non-critical)
     - _Requirements: 8.1, 8.2, 10.6_
   
-  - [ ] 12.2 Create analysis record builder
+  - [x] 12.2 Create analysis record builder
     - Write `buildAnalysisRecord(profile: ICPProfile, topCustomerIds: string[], scoreDistribution: object, executionMetrics: object): ICPAnalysisRecord` function
     - Calculate score distribution statistics (min, max, mean, p90)
     - Include execution metrics (duration, customer count, API call count)
@@ -318,39 +332,42 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Test that querying DynamoDB with timestamp returns complete record
     - Test that all fields are populated correctly
   
-  - [ ] 12.4 Write unit tests for history storage
+  - [x] 12.4 Write unit tests for history storage
     - Test successful DynamoDB writes with mock client
     - Test retry logic for write failures
     - Test analysis record building with various inputs
     - Test score distribution calculations
     - _Requirements: 8.1, 8.2, 10.6_
 
-- [ ] 13. Checkpoint - Ensure Knowledge Base and history storage tests pass
+- [x] 13. Checkpoint - Ensure Knowledge Base and history storage tests pass
   - Run all unit tests and property tests for KB updates and history storage
   - Verify version management works correctly
   - Ensure all tests pass, ask the user if questions arise
 
-- [ ] 14. Implement main Lambda handler
-  - [ ] 14.1 Create orchestration function
-    - Write `runICPRefinement(): Promise<void>` function as main entry point
+- [-] 14. Implement main Lambda handler
+  - [x] 14.1 Create orchestration function
+    - Write `runICPRefinement(userId: string): Promise<void>` function as main entry point
+    - Pass userId parameter through to data fetching functions for credential vault integration
     - Orchestrate all steps: fetch → correlate → score → filter → mask → analyze → update → store
     - Track execution time and metrics
     - Implement top-level error handling
     - _Requirements: NFR-1, NFR-3_
+    - _Bugfix: vault-integration-data-fetching (userId parameter added)_
   
-  - [ ] 14.2 Implement batch processing with checkpoints
+  - [x] 14.2 Implement batch processing with checkpoints
     - Store checkpoint in DynamoDB if processing > 500 companies
     - Implement resume capability from last checkpoint
     - Use Promise.all for parallel independent API calls
     - _Requirements: 1.4, NFR-1_
   
-  - [ ] 14.3 Create Lambda handler function
+  - [x] 14.3 Create Lambda handler function
     - Write `handler(event: any): Promise<void>` function
-    - Parse EventBridge event or manual invocation
-    - Call runICPRefinement
+    - Parse EventBridge event or manual invocation to extract userId
+    - Call runICPRefinement(userId)
     - Handle errors and return appropriate responses
     - Log invocation type (scheduled vs manual)
     - _Requirements: 9.1, 9.2_
+    - _Bugfix: vault-integration-data-fetching (userId extraction added)_
   
   - [ ] 14.4 Implement CloudWatch metrics publishing
     - Publish ICPAnalysisSuccess metric (1 for success, 0 for failure)
@@ -396,26 +413,29 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
 
 - [ ] 16. Configure environment and IAM
   - [ ] 16.1 Create environment configuration
-    - Document required environment variables (AWS_REGION, KNOWLEDGE_BASE_ID, NOVA_MODEL_ID, HUBSPOT_API_KEY, MIXPANEL_API_KEY, STRIPE_API_KEY, ANALYSIS_TABLE_NAME, MIN_SAMPLE_SIZE)
+    - Document required environment variables (AWS_REGION, KNOWLEDGE_BASE_ID, NOVA_MODEL_ID, ANALYSIS_TABLE_NAME, MIN_SAMPLE_SIZE, CREDENTIAL_VAULT_LAMBDA_ARN)
     - Add environment variable validation at startup
     - Create `.env.example` file with placeholder values
     - _Requirements: NFR-4_
+    - _Note: API keys (HUBSPOT_API_KEY, MIXPANEL_API_KEY, STRIPE_API_KEY) are now managed by credential vault, not environment variables_
   
-  - [ ] 16.2 Configure AWS Secrets Manager integration
-    - Store API keys in AWS Secrets Manager
-    - Write `loadAPIKeys(): Promise<APIKeys>` function to retrieve secrets
-    - Document secret naming conventions
-    - Document key rotation process (every 90 days)
+  - [ ] 16.2 Configure credential vault integration
+    - Document that API credentials are retrieved from credential vault Lambda
+    - Document userId requirement for credential retrieval
+    - Document credential vault Lambda ARN configuration
+    - Document error handling for service not connected scenarios
     - _Requirements: NFR-4_
+    - _Bugfix: vault-integration-data-fetching (replaces AWS Secrets Manager integration)_
   
   - [ ] 16.3 Create IAM policy
     - Document required IAM permissions for Lambda execution role
     - Include: bedrock:InvokeModel, bedrock:Retrieve, bedrock:UpdateKnowledgeBase
     - Include: dynamodb:PutItem, dynamodb:GetItem
     - Include: logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents
-    - Include: secretsmanager:GetSecretValue
+    - Include: lambda:InvokeFunction (for credential vault Lambda invocation)
     - Create example IAM policy JSON
     - _Requirements: NFR-4_
+    - _Bugfix: vault-integration-data-fetching (added lambda:InvokeFunction permission)_
 
 - [ ] 17. Configure CloudWatch alarms
   - [ ] 17.1 Create alarm for analysis failures

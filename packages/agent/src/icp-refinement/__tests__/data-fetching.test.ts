@@ -11,15 +11,69 @@ import {
   calculateDataCompleteness,
 } from '../data-fetching.js';
 
+// Mock AWS SDK Lambda client
+vi.mock('@aws-sdk/client-lambda', () => {
+  return {
+    LambdaClient: class MockLambdaClient {
+      async send(command: any) {
+        const payload = JSON.parse(command.input.Payload);
+        const serviceName = payload.serviceName;
+        
+        if (serviceName === 'hubspot') {
+          return {
+            Payload: new TextEncoder().encode(JSON.stringify({
+              service_name: 'hubspot',
+              credential_type: 'oauth',
+              data: {
+                access_token: 'test-hubspot-key',
+                refresh_token: 'test-refresh',
+                token_expiry: new Date(Date.now() + 3600000).toISOString(),
+              },
+            })),
+          };
+        } else if (serviceName === 'mixpanel') {
+          return {
+            Payload: new TextEncoder().encode(JSON.stringify({
+              service_name: 'mixpanel',
+              credential_type: 'service_account',
+              data: {
+                username: 'test-mixpanel-key',
+                secret: 'test-mixpanel-secret',
+              },
+            })),
+          };
+        } else if (serviceName === 'stripe') {
+          return {
+            Payload: new TextEncoder().encode(JSON.stringify({
+              service_name: 'stripe',
+              credential_type: 'api_key',
+              data: {
+                api_key: 'test-stripe-key',
+              },
+            })),
+          };
+        }
+      }
+    },
+    InvokeCommand: class MockInvokeCommand {
+      input: any;
+      constructor(input: any) {
+        this.input = input;
+      }
+    },
+  };
+});
+
 // Mock global fetch
 global.fetch = vi.fn();
 
 describe('Data Fetching Layer', () => {
+  const testUserId = 'test-user-123';
+
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.HUBSPOT_API_KEY = 'test-hubspot-key';
-    process.env.MIXPANEL_API_KEY = 'test-mixpanel-key';
-    process.env.STRIPE_API_KEY = 'test-stripe-key';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.CREDENTIAL_RETRIEVAL_LAMBDA_NAME = 'credential-retrieval';
   });
 
   afterEach(() => {
@@ -50,7 +104,7 @@ describe('Data Fetching Layer', () => {
         json: async () => mockResponse,
       });
 
-      const companies = await fetchHubSpotCompanies(10);
+      const companies = await fetchHubSpotCompanies(testUserId, 10);
 
       expect(companies).toHaveLength(1);
       expect(companies[0]).toMatchObject({
@@ -108,7 +162,7 @@ describe('Data Fetching Layer', () => {
           json: async () => mockResponse2,
         });
 
-      const companies = await fetchHubSpotCompanies(200);
+      const companies = await fetchHubSpotCompanies(testUserId, 200);
 
       expect(companies).toHaveLength(2);
       expect(companies[0].companyId).toBe('1');
@@ -138,7 +192,7 @@ describe('Data Fetching Layer', () => {
           }),
         });
 
-      const companies = await fetchHubSpotCompanies(10);
+      const companies = await fetchHubSpotCompanies(testUserId, 10);
 
       expect(companies).toHaveLength(1);
       expect(global.fetch).toHaveBeenCalledTimes(2);
@@ -147,13 +201,13 @@ describe('Data Fetching Layer', () => {
     it('should throw error after max retries', async () => {
       (global.fetch as any).mockRejectedValue(new Error('Network error'));
 
-      await expect(fetchHubSpotCompanies(10)).rejects.toThrow('HubSpot API call failed after 3 attempts');
+      await expect(fetchHubSpotCompanies(testUserId, 10)).rejects.toThrow('HubSpot API call failed after 3 attempts');
     }, 10000); // 10 second timeout for retry delays
 
     it('should handle missing environment variable', async () => {
       delete process.env.HUBSPOT_API_KEY;
 
-      await expect(fetchHubSpotCompanies(10)).rejects.toThrow('HUBSPOT_API_KEY environment variable is required');
+      await expect(fetchHubSpotCompanies(testUserId, 10)).rejects.toThrow('HUBSPOT_API_KEY environment variable is required');
     });
   });
 
@@ -190,7 +244,7 @@ describe('Data Fetching Layer', () => {
           json: async () => mockRetentionResponse,
         });
 
-      const cohorts = await fetchMixpanelCohorts(['company1']);
+      const cohorts = await fetchMixpanelCohorts(testUserId, ['company1']);
 
       expect(cohorts).toHaveLength(1);
       expect(cohorts[0]).toMatchObject({
@@ -203,7 +257,7 @@ describe('Data Fetching Layer', () => {
     it('should handle missing data gracefully', async () => {
       (global.fetch as any).mockRejectedValue(new Error('API error'));
 
-      const cohorts = await fetchMixpanelCohorts(['company1', 'company2']);
+      const cohorts = await fetchMixpanelCohorts(testUserId, ['company1', 'company2']);
 
       expect(cohorts).toHaveLength(2);
       expect(cohorts[0]).toBeNull();
@@ -219,7 +273,7 @@ describe('Data Fetching Layer', () => {
       });
 
       const startTime = Date.now();
-      await fetchMixpanelCohorts(companyIds);
+      await fetchMixpanelCohorts(testUserId, companyIds);
       const duration = Date.now() - startTime;
 
       // Should have at least one 500ms delay between batches
@@ -274,7 +328,7 @@ describe('Data Fetching Layer', () => {
           json: async () => mockInvoicesResponse,
         });
 
-      const customers = await fetchStripeCustomers(['company1']);
+      const customers = await fetchStripeCustomers(testUserId, ['company1']);
 
       expect(customers).toHaveLength(1);
       expect(customers[0]).toMatchObject({
@@ -318,7 +372,7 @@ describe('Data Fetching Layer', () => {
           json: async () => mockInvoicesResponse,
         });
 
-      const customers = await fetchStripeCustomers(['company1']);
+      const customers = await fetchStripeCustomers(testUserId, ['company1']);
 
       expect(customers[0].hasChurnSignal).toBe(true);
     });
@@ -326,7 +380,7 @@ describe('Data Fetching Layer', () => {
     it('should handle missing data gracefully', async () => {
       (global.fetch as any).mockRejectedValue(new Error('API error'));
 
-      const customers = await fetchStripeCustomers(['company1', 'company2']);
+      const customers = await fetchStripeCustomers(testUserId, ['company1', 'company2']);
 
       expect(customers).toHaveLength(2);
       expect(customers[0]).toBeNull();
@@ -399,7 +453,7 @@ describe('Data Fetching Layer', () => {
           json: async () => ({ data: {} }),
         });
 
-      const result = await fetchAllCustomerData(10);
+      const result = await fetchAllCustomerData(testUserId, 10);
 
       expect(result.hubspotCompanies).toHaveLength(1);
       expect(result.completenessMetrics.totalCompanies).toBe(1);
@@ -408,7 +462,7 @@ describe('Data Fetching Layer', () => {
     it('should throw error if HubSpot fails', async () => {
       (global.fetch as any).mockRejectedValue(new Error('HubSpot error'));
 
-      await expect(fetchAllCustomerData(10)).rejects.toThrow('Cannot proceed without HubSpot data');
+      await expect(fetchAllCustomerData(testUserId, 10)).rejects.toThrow('Cannot proceed without HubSpot data');
     }, 10000); // 10 second timeout for retry delays
 
     it('should continue if Mixpanel fails', async () => {
@@ -440,7 +494,7 @@ describe('Data Fetching Layer', () => {
           json: async () => ({ data: [] }),
         });
 
-      const result = await fetchAllCustomerData(10);
+      const result = await fetchAllCustomerData(testUserId, 10);
 
       expect(result.hubspotCompanies).toHaveLength(1);
       expect(result.mixpanelCohorts[0]).toBeNull();

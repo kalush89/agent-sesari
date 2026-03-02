@@ -3,7 +3,113 @@
  * Handles HubSpot, Mixpanel, and Stripe API calls with retry logic and rate limiting
  */
 
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { HubSpotCompany, MixpanelCohort, StripeCustomer } from './types.js';
+import {  
+  DecryptedCredential,
+  OAuthCredential,
+  APIKeyCredential,
+  ServiceAccountCredential,
+  ServiceName
+} from './credential-types.js';
+/**
+ * Retrieves credentials from the credential vault for a specific service
+ * Invokes the credential retrieval Lambda to get decrypted credentials
+ * 
+ * @param userId - User identifier
+ * @param serviceName - Service to retrieve credentials for (hubspot, stripe, mixpanel)
+ * @returns Decrypted credential data
+ * @throws Error if service is not connected or Lambda invocation fails
+ */
+async function getServiceCredentials(
+  userId: string,
+  serviceName: ServiceName
+): Promise<DecryptedCredential> {
+  const lambdaClient = new LambdaClient({ 
+    region: process.env.AWS_REGION || 'us-east-1' 
+  });
+
+  const functionName = process.env.CREDENTIAL_RETRIEVAL_LAMBDA_NAME || 'credential-retrieval';
+
+  try {
+    const command = new InvokeCommand({
+      FunctionName: functionName,
+      Payload: JSON.stringify({ userId, serviceName }),
+    });
+
+    const response = await lambdaClient.send(command);
+
+    if (!response.Payload) {
+      throw new Error('Empty response from credential retrieval Lambda');
+    }
+
+    const payloadString = new TextDecoder().decode(response.Payload);
+    const result = JSON.parse(payloadString);
+
+    // Check if Lambda returned an error
+    if (result.errorType || result.errorMessage) {
+      const errorMessage = result.errorMessage || 'Unknown error from credential retrieval';
+      
+      // Check if it's a NOT_FOUND error
+      if (errorMessage.includes('No credentials found') || errorMessage.includes('NOT_FOUND')) {
+        throw new Error(`Service not connected. Please connect ${serviceName} first.`);
+      }
+      
+      throw new Error(`Credential retrieval failed: ${errorMessage}`);
+    }
+
+    return result as DecryptedCredential;
+  } catch (error) {
+    if (error instanceof Error) {
+      // Re-throw our custom error messages
+      if (error.message.includes('Service not connected')) {
+        throw error;
+      }
+      
+      throw new Error(`Failed to retrieve credentials for ${serviceName}: ${error.message}`);
+    }
+    
+    throw new Error(`Failed to retrieve credentials for ${serviceName}: Unknown error`);
+  }
+}
+
+/**
+ * Creates HubSpot authentication header with Bearer token
+ * 
+ * @param accessToken - OAuth access token
+ * @returns Authorization header object
+ */
+function createHubSpotAuthHeader(accessToken: string): { Authorization: string } {
+  return {
+    Authorization: `Bearer ${accessToken}`
+  };
+}
+
+/**
+ * Creates Stripe authentication header with Bearer token
+ * 
+ * @param apiKey - Stripe API key
+ * @returns Authorization header object
+ */
+function createStripeAuthHeader(apiKey: string): { Authorization: string } {
+  return {
+    Authorization: `Bearer ${apiKey}`
+  };
+}
+
+/**
+ * Creates Mixpanel authentication header with Basic auth
+ * 
+ * @param username - Mixpanel service account username
+ * @param secret - Mixpanel service account secret
+ * @returns Authorization header object with Base64-encoded credentials
+ */
+function createMixpanelAuthHeader(username: string, secret: string): { Authorization: string } {
+  const credentials = Buffer.from(`${username}:${secret}`).toString('base64');
+  return {
+    Authorization: `Basic ${credentials}`
+  };
+}
 
 /**
  * Delays execution for specified milliseconds
@@ -43,14 +149,18 @@ async function retryWithBackoff<T>(
 /**
  * Fetches companies from HubSpot with pagination and retry logic
  * 
+ * @param userId - User identifier for credential retrieval
  * @param limit - Maximum number of companies to fetch
  * @returns Array of HubSpot company records
  * @throws Error if HubSpot API fails after all retries
  */
-export async function fetchHubSpotCompanies(limit: number): Promise<HubSpotCompany[]> {
-  const apiKey = process.env.HUBSPOT_API_KEY;
-  if (!apiKey) {
-    throw new Error('HUBSPOT_API_KEY environment variable is required');
+export async function fetchHubSpotCompanies(userId: string, limit: number): Promise<HubSpotCompany[]> {
+  // Retrieve OAuth credentials from vault
+  const credentials = await getServiceCredentials(userId, 'hubspot');
+  const oauthCred = credentials.data as OAuthCredential;
+  
+  if (!oauthCred.access_token) {
+    throw new Error('HubSpot OAuth access token not available');
   }
 
   const companies: HubSpotCompany[] = [];
@@ -62,7 +172,7 @@ export async function fetchHubSpotCompanies(limit: number): Promise<HubSpotCompa
     const currentBatchSize = Math.min(batchSize, remaining);
 
     const batch = await retryWithBackoff(
-      async () => fetchHubSpotBatch(apiKey, currentBatchSize, after),
+      async () => fetchHubSpotBatch(oauthCred.access_token!, currentBatchSize, after),
       3,
       'HubSpot API call'
     );
@@ -89,7 +199,7 @@ export async function fetchHubSpotCompanies(limit: number): Promise<HubSpotCompa
  * Fetches a single batch of companies from HubSpot
  */
 async function fetchHubSpotBatch(
-  apiKey: string,
+  accessToken: string,
   limit: number,
   after?: string
 ): Promise<{ companies: HubSpotCompany[]; hasMore: boolean; after?: string }> {
@@ -101,9 +211,11 @@ async function fetchHubSpotBatch(
     url.searchParams.set('after', after);
   }
 
+  const authHeader = createHubSpotAuthHeader(accessToken);
+
   const response = await fetch(url.toString(), {
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      ...authHeader,
       'Content-Type': 'application/json',
     },
   });
@@ -135,13 +247,17 @@ async function fetchHubSpotBatch(
 /**
  * Fetches cohort data from Mixpanel for specified companies
  * 
+ * @param userId - User identifier for credential retrieval
  * @param companyIds - Array of company IDs to fetch data for
  * @returns Array of Mixpanel cohort records (null for unavailable companies)
  */
-export async function fetchMixpanelCohorts(companyIds: string[]): Promise<MixpanelCohort[]> {
-  const apiKey = process.env.MIXPANEL_API_KEY;
-  if (!apiKey) {
-    throw new Error('MIXPANEL_API_KEY environment variable is required');
+export async function fetchMixpanelCohorts(userId: string, companyIds: string[]): Promise<MixpanelCohort[]> {
+  // Retrieve service account credentials from vault
+  const credentials = await getServiceCredentials(userId, 'mixpanel');
+  const serviceAccountCred = credentials.data as ServiceAccountCredential;
+  
+  if (!serviceAccountCred.username || !serviceAccountCred.secret) {
+    throw new Error('Mixpanel service account credentials not available');
   }
 
   const cohorts: MixpanelCohort[] = [];
@@ -151,7 +267,11 @@ export async function fetchMixpanelCohorts(companyIds: string[]): Promise<Mixpan
     const batch = companyIds.slice(i, i + batchSize);
 
     try {
-      const batchResults = await fetchMixpanelBatch(apiKey, batch);
+      const batchResults = await fetchMixpanelBatch(
+        serviceAccountCred.username,
+        serviceAccountCred.secret,
+        batch
+      );
       cohorts.push(...batchResults);
     } catch (error) {
       console.warn(`Mixpanel batch fetch failed, continuing with null values:`, error);
@@ -173,7 +293,8 @@ export async function fetchMixpanelCohorts(companyIds: string[]): Promise<Mixpan
  * Fetches a single batch of cohort data from Mixpanel
  */
 async function fetchMixpanelBatch(
-  apiKey: string,
+  username: string,
+  secret: string,
   companyIds: string[]
 ): Promise<MixpanelCohort[]> {
   // Calculate date range for 30-day retention
@@ -186,10 +307,10 @@ async function fetchMixpanelBatch(
   for (const companyId of companyIds) {
     try {
       // Fetch 'Aha! Moment' event count
-      const eventCount = await fetchMixpanelEventCount(apiKey, companyId, startDate, endDate);
+      const eventCount = await fetchMixpanelEventCount(username, secret, companyId, startDate, endDate);
       
       // Fetch 30-day retention rate
-      const retentionRate = await fetchMixpanelRetention(apiKey, companyId, startDate, endDate);
+      const retentionRate = await fetchMixpanelRetention(username, secret, companyId, startDate, endDate);
 
       cohorts.push({
         companyId,
@@ -219,7 +340,8 @@ async function fetchMixpanelBatch(
  * 2. Or modify this function to use a different property name
  */
 async function fetchMixpanelEventCount(
-  apiKey: string,
+  username: string,
+  secret: string,
   companyId: string,
   startDate: Date,
   endDate: Date
@@ -232,9 +354,11 @@ async function fetchMixpanelEventCount(
   url.searchParams.set('to_date', endDate.toISOString().split('T')[0]);
   url.searchParams.set('where', `properties["company_id"]=="${companyId}"`);
 
+  const authHeader = createMixpanelAuthHeader(username, secret);
+
   const response = await fetch(url.toString(), {
     headers: {
-      'Authorization': `Basic ${Buffer.from(`${apiKey}:`).toString('base64')}`,
+      ...authHeader,
       'Content-Type': 'application/json',
     },
   });
@@ -262,7 +386,8 @@ async function fetchMixpanelEventCount(
  * 2. Or modify this function to use a different property name
  */
 async function fetchMixpanelRetention(
-  apiKey: string,
+  username: string,
+  secret: string,
   companyId: string,
   startDate: Date,
   endDate: Date
@@ -276,9 +401,11 @@ async function fetchMixpanelRetention(
   url.searchParams.set('interval_count', '30');
   url.searchParams.set('where', `properties["company_id"]=="${companyId}"`);
 
+  const authHeader = createMixpanelAuthHeader(username, secret);
+
   const response = await fetch(url.toString(), {
     headers: {
-      'Authorization': `Basic ${Buffer.from(`${apiKey}:`).toString('base64')}`,
+      ...authHeader,
       'Content-Type': 'application/json',
     },
   });
@@ -310,13 +437,17 @@ async function fetchMixpanelRetention(
 /**
  * Fetches customer data from Stripe for specified companies
  * 
+ * @param userId - User identifier for credential retrieval
  * @param companyIds - Array of company IDs to fetch data for
  * @returns Array of Stripe customer records (null for unavailable companies)
  */
-export async function fetchStripeCustomers(companyIds: string[]): Promise<StripeCustomer[]> {
-  const apiKey = process.env.STRIPE_API_KEY;
-  if (!apiKey) {
-    throw new Error('STRIPE_API_KEY environment variable is required');
+export async function fetchStripeCustomers(userId: string, companyIds: string[]): Promise<StripeCustomer[]> {
+  // Retrieve API key credentials from vault
+  const credentials = await getServiceCredentials(userId, 'stripe');
+  const apiKeyCred = credentials.data as APIKeyCredential;
+  
+  if (!apiKeyCred.api_key) {
+    throw new Error('Stripe API key not available');
   }
 
   const customers: StripeCustomer[] = [];
@@ -326,7 +457,7 @@ export async function fetchStripeCustomers(companyIds: string[]): Promise<Stripe
     const batch = companyIds.slice(i, i + batchSize);
 
     try {
-      const batchResults = await fetchStripeBatch(apiKey, batch);
+      const batchResults = await fetchStripeBatch(apiKeyCred.api_key, batch);
       customers.push(...batchResults);
     } catch (error) {
       console.warn(`Stripe batch fetch failed, continuing with null values:`, error);
@@ -373,13 +504,15 @@ async function fetchStripeCustomer(
   apiKey: string,
   companyId: string
 ): Promise<StripeCustomer> {
+  const authHeader = createStripeAuthHeader(apiKey);
+
   // Search for customer by metadata (assuming company_id is stored in metadata)
   const searchUrl = new URL('https://api.stripe.com/v1/customers/search');
   searchUrl.searchParams.set('query', `metadata['company_id']:'${companyId}'`);
 
   const searchResponse = await fetch(searchUrl.toString(), {
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      ...authHeader,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
   });
@@ -404,7 +537,7 @@ async function fetchStripeCustomer(
 
   const subscriptionsResponse = await fetch(subscriptionsUrl.toString(), {
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      ...authHeader,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
   });
@@ -454,7 +587,7 @@ async function fetchStripeCustomer(
 
   const invoicesResponse = await fetch(invoicesUrl.toString(), {
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      ...authHeader,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
   });
@@ -539,7 +672,7 @@ export function logDataCompleteness(metrics: DataCompletenessMetrics): void {
 /**
  * Fetches all customer data from HubSpot, Mixpanel, and Stripe with error handling
  */
-export async function fetchAllCustomerData(limit: number): Promise<{
+export async function fetchAllCustomerData(userId: string, limit: number): Promise<{
   hubspotCompanies: HubSpotCompany[];
   mixpanelCohorts: (MixpanelCohort | null)[];
   stripeCustomers: (StripeCustomer | null)[];
@@ -550,7 +683,7 @@ export async function fetchAllCustomerData(limit: number): Promise<{
   // Fetch HubSpot data (critical - abort if fails)
   let hubspotCompanies: HubSpotCompany[];
   try {
-    hubspotCompanies = await fetchHubSpotCompanies(limit);
+    hubspotCompanies = await fetchHubSpotCompanies(userId, limit);
   } catch (error) {
     console.error('CRITICAL: HubSpot data fetch failed after all retries:', error);
     throw new Error(`Cannot proceed without HubSpot data: ${(error as Error).message}`);
@@ -565,7 +698,7 @@ export async function fetchAllCustomerData(limit: number): Promise<{
   // Fetch Mixpanel data (non-critical - continue with nulls if fails)
   let mixpanelCohorts: (MixpanelCohort | null)[];
   try {
-    mixpanelCohorts = await fetchMixpanelCohorts(companyIds);
+    mixpanelCohorts = await fetchMixpanelCohorts(userId, companyIds);
   } catch (error) {
     console.warn('Mixpanel data fetch failed, continuing with null values:', error);
     mixpanelCohorts = companyIds.map(() => null);
@@ -574,7 +707,7 @@ export async function fetchAllCustomerData(limit: number): Promise<{
   // Fetch Stripe data (non-critical - continue with nulls if fails)
   let stripeCustomers: (StripeCustomer | null)[];
   try {
-    stripeCustomers = await fetchStripeCustomers(companyIds);
+    stripeCustomers = await fetchStripeCustomers(userId, companyIds);
   } catch (error) {
     console.warn('Stripe data fetch failed, continuing with null values:', error);
     stripeCustomers = companyIds.map(() => null);
