@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { validateGoalInput, validateDecompositionResponse } from './validation';
-import { ValidationError } from './types';
+import { validateGoalInput, validateDecompositionResponse } from '../validation.js';
+import { ValidationError } from '../types.js';
 
 describe('validateGoalInput', () => {
   it('should accept valid non-empty goal strings', () => {

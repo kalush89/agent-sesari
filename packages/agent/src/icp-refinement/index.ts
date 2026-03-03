@@ -15,18 +15,13 @@ import { getLatestICPVersion, updateICPProfile } from './kb-updater.js';
 import { storeAnalysisRecord, buildAnalysisRecord, calculateScoreDistribution } from './history-store.js';
 import { saveCheckpoint, loadCheckpoint, clearCheckpoint } from './checkpoint.js';
 import { ICPProfile, ScoredCustomer } from './types.js';
-
-/**
- * Generates a correlation ID for tracing
- */
-function generateCorrelationId(): string {
-  return `icp-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-}
+import { generateCorrelationId, logInfo, logWarn, logError } from './logging.js';
 
 /**
  * Publishes CloudWatch metrics for monitoring
  */
 async function publishMetrics(
+  correlationId: string,
   success: boolean,
   customersAnalyzed: number,
   durationMs: number,
@@ -38,17 +33,17 @@ async function publishMetrics(
     {
       MetricName: 'ICPAnalysisSuccess',
       Value: success ? 1 : 0,
-      Unit: 'None',
+      Unit: 'None' as const,
     },
     {
       MetricName: 'CustomersAnalyzed',
       Value: customersAnalyzed,
-      Unit: 'Count',
+      Unit: 'Count' as const,
     },
     {
       MetricName: 'AnalysisDurationMs',
       Value: durationMs,
-      Unit: 'Milliseconds',
+      Unit: 'Milliseconds' as const,
     },
   ];
 
@@ -56,7 +51,7 @@ async function publishMetrics(
     metrics.push({
       MetricName: 'ICPConfidenceScore',
       Value: confidenceScore,
-      Unit: 'None',
+      Unit: 'None' as const,
     });
   }
 
@@ -70,9 +65,17 @@ async function publishMetrics(
         })),
       })
     );
-    console.log('[Metrics] Published CloudWatch metrics');
+    logInfo('Published CloudWatch metrics', {
+      correlation_id: correlationId,
+      phase: 'metrics-publishing',
+      metrics_count: metrics.length,
+    });
   } catch (error) {
-    console.error('[Metrics] Failed to publish metrics:', error);
+    logError('Failed to publish CloudWatch metrics', {
+      correlation_id: correlationId,
+      phase: 'metrics-publishing',
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -84,25 +87,58 @@ export async function runICPRefinement(userId: string): Promise<void> {
   const correlationId = generateCorrelationId();
   const startTime = Date.now();
   
-  console.log(`[${correlationId}] Starting ICP refinement analysis`);
-  console.log(`[${correlationId}] Phase: Environment validation`);
+  logInfo('Starting ICP refinement analysis', {
+    correlation_id: correlationId,
+    phase: 'initialization',
+    user_id: userId,
+  });
   
   try {
     // Validate environment variables
+    logInfo('Validating environment configuration', {
+      correlation_id: correlationId,
+      phase: 'environment-validation',
+    });
+    
     validateEnvironment();
     const config = createEngineConfig();
     
     // Check for existing checkpoint
     const existingCheckpoint = await loadCheckpoint(userId, config.analysisTableName);
     
-    console.log(`[${correlationId}] Phase: Data fetching`);
+    if (existingCheckpoint) {
+      logInfo('Found existing checkpoint, resuming analysis', {
+        correlation_id: correlationId,
+        phase: 'checkpoint-recovery',
+        last_processed_index: existingCheckpoint.lastProcessedIndex,
+      });
+    }
+    
+    logInfo('Starting data fetching phase', {
+      correlation_id: correlationId,
+      phase: 'data-fetching',
+    });
     
     // Step 1: Fetch data from all sources
     const { hubspotCompanies, mixpanelCohorts, stripeCustomers, completenessMetrics } = 
-      await fetchAllCustomerData(userId, 1000); // Fetch up to 1000 companies
+      await fetchAllCustomerData(userId, 1000);
+    
+    logInfo('Data fetching completed', {
+      correlation_id: correlationId,
+      phase: 'data-fetching',
+      hubspot_count: hubspotCompanies.length,
+      mixpanel_count: mixpanelCohorts.length,
+      stripe_count: stripeCustomers.length,
+    });
     
     // Save checkpoint if processing > 500 companies
     if (hubspotCompanies.length > 500) {
+      logInfo('Large dataset detected, saving checkpoint', {
+        correlation_id: correlationId,
+        phase: 'checkpoint-save',
+        total_companies: hubspotCompanies.length,
+      });
+      
       await saveCheckpoint(
         {
           userId,
@@ -115,7 +151,10 @@ export async function runICPRefinement(userId: string): Promise<void> {
       );
     }
     
-    console.log(`[${correlationId}] Phase: Data correlation`);
+    logInfo('Starting data correlation phase', {
+      correlation_id: correlationId,
+      phase: 'data-correlation',
+    });
     
     // Step 2: Correlate data across platforms
     const correlatedCustomers = correlateCustomerData(
@@ -127,7 +166,18 @@ export async function runICPRefinement(userId: string): Promise<void> {
     const correlationMetrics = calculateCorrelationCompleteness(correlatedCustomers);
     logCompletenessWarnings(correlatedCustomers, correlationMetrics);
     
-    console.log(`[${correlationId}] Phase: Customer scoring`);
+    logInfo('Data correlation completed', {
+      correlation_id: correlationId,
+      phase: 'data-correlation',
+      correlated_count: correlatedCustomers.length,
+      mixpanel_completeness: correlationMetrics.mixpanelCompleteness,
+      stripe_completeness: correlationMetrics.stripeCompleteness,
+    });
+    
+    logInfo('Starting customer scoring phase', {
+      correlation_id: correlationId,
+      phase: 'customer-scoring',
+    });
     
     // Step 3: Calculate Ideal Customer Scores (parallel processing)
     const scoredCustomers: ScoredCustomer[] = await Promise.all(
@@ -136,33 +186,90 @@ export async function runICPRefinement(userId: string): Promise<void> {
       )
     );
     
-    console.log(`[${correlationId}] Phase: Sample size validation`);
+    logInfo('Customer scoring completed', {
+      correlation_id: correlationId,
+      phase: 'customer-scoring',
+      scored_count: scoredCustomers.length,
+    });
+    
+    logInfo('Validating sample size', {
+      correlation_id: correlationId,
+      phase: 'sample-validation',
+      total_customers: scoredCustomers.length,
+      min_required: config.minSampleSize,
+    });
     
     // Step 4: Validate sample size
     validateSampleSize(scoredCustomers, config.minSampleSize);
     
-    console.log(`[${correlationId}] Phase: Top customer selection`);
+    logInfo('Starting top customer selection', {
+      correlation_id: correlationId,
+      phase: 'top-selection',
+      percentile: config.topPercentile,
+    });
     
     // Step 5: Select top 10% of customers
     const topCustomers = selectTopCustomers(scoredCustomers, config.topPercentile);
-    console.log(`[${correlationId}] Selected ${topCustomers.length} top customers for analysis`);
     
-    console.log(`[${correlationId}] Phase: PII masking`);
+    logInfo('Top customer selection completed', {
+      correlation_id: correlationId,
+      phase: 'top-selection',
+      selected_count: topCustomers.length,
+    });
+    
+    logInfo('Starting PII masking phase', {
+      correlation_id: correlationId,
+      phase: 'pii-masking',
+    });
     
     // Step 6: Mask PII from customer data
     const maskedCustomers = maskCustomerData(topCustomers);
     validateNoPII(maskedCustomers);
     
-    console.log(`[${correlationId}] Phase: Trait analysis`);
+    logInfo('PII masking completed', {
+      correlation_id: correlationId,
+      phase: 'pii-masking',
+      masked_count: maskedCustomers.length,
+    });
+    
+    logInfo('Starting trait analysis phase', {
+      correlation_id: correlationId,
+      phase: 'trait-analysis',
+    });
     
     // Step 7: Get previous ICP version
     const previousVersion = await getLatestICPVersion(config.knowledgeBaseId);
     const previousICP = null; // TODO: Retrieve previous ICP profile if needed
     
+    logInfo('Retrieved previous ICP version', {
+      correlation_id: correlationId,
+      phase: 'trait-analysis',
+      previous_version: previousVersion,
+    });
+    
     // Step 8: Analyze traits using Nova Lite
     const traitAnalysis = await analyzeTraitsWithFallback(maskedCustomers, previousICP);
     
-    console.log(`[${correlationId}] Phase: ICP profile creation`);
+    logInfo('Trait analysis completed', {
+      correlation_id: correlationId,
+      phase: 'trait-analysis',
+      confidence_score: traitAnalysis.confidenceScore,
+      is_degraded: traitAnalysis.confidenceScore < 50,
+    });
+    
+    if (traitAnalysis.confidenceScore < 50) {
+      logWarn('Low confidence score detected', {
+        correlation_id: correlationId,
+        phase: 'trait-analysis',
+        confidence_score: traitAnalysis.confidenceScore,
+      });
+    }
+    
+    logInfo('Creating new ICP profile', {
+      correlation_id: correlationId,
+      phase: 'icp-profile-creation',
+      new_version: previousVersion + 1,
+    });
     
     // Step 9: Create new ICP profile
     const newProfile: ICPProfile = {
@@ -174,12 +281,24 @@ export async function runICPRefinement(userId: string): Promise<void> {
       sampleSize: topCustomers.length,
     };
     
-    console.log(`[${correlationId}] Phase: Knowledge Base update`);
+    logInfo('Starting Knowledge Base update', {
+      correlation_id: correlationId,
+      phase: 'kb-update',
+      version: newProfile.version,
+    });
     
     // Step 10: Update Knowledge Base
     await updateICPProfile(newProfile, config.knowledgeBaseId);
     
-    console.log(`[${correlationId}] Phase: History storage`);
+    logInfo('Knowledge Base update completed', {
+      correlation_id: correlationId,
+      phase: 'kb-update',
+    });
+    
+    logInfo('Starting history storage', {
+      correlation_id: correlationId,
+      phase: 'history-storage',
+    });
     
     // Step 11: Store analysis history
     const scoreDistribution = calculateScoreDistribution(scoredCustomers);
@@ -198,15 +317,28 @@ export async function runICPRefinement(userId: string): Promise<void> {
     
     await storeAnalysisRecord(analysisRecord, config.analysisTableName);
     
+    logInfo('History storage completed', {
+      correlation_id: correlationId,
+      phase: 'history-storage',
+    });
+    
     // Clear checkpoint on successful completion
     if (hubspotCompanies.length > 500) {
       await clearCheckpoint(userId, config.analysisTableName);
+      logInfo('Checkpoint cleared', {
+        correlation_id: correlationId,
+        phase: 'checkpoint-cleanup',
+      });
     }
     
-    console.log(`[${correlationId}] Phase: Metrics publishing`);
+    logInfo('Publishing CloudWatch metrics', {
+      correlation_id: correlationId,
+      phase: 'metrics-publishing',
+    });
     
     // Step 12: Publish CloudWatch metrics
     await publishMetrics(
+      correlationId,
       true,
       scoredCustomers.length,
       executionMetrics.durationMs,
@@ -214,16 +346,26 @@ export async function runICPRefinement(userId: string): Promise<void> {
     );
     
     const durationSeconds = (Date.now() - startTime) / 1000;
-    console.log(`[${correlationId}] ICP refinement completed successfully in ${durationSeconds.toFixed(2)}s`);
-    console.log(`[${correlationId}] New ICP version: ${newProfile.version}`);
-    console.log(`[${correlationId}] Confidence score: ${newProfile.confidenceScore}`);
+    logInfo('ICP refinement completed successfully', {
+      correlation_id: correlationId,
+      phase: 'completion',
+      duration_seconds: durationSeconds,
+      new_version: newProfile.version,
+      confidence_score: newProfile.confidenceScore,
+      customers_analyzed: scoredCustomers.length,
+    });
     
   } catch (error) {
     const durationMs = Date.now() - startTime;
-    console.error(`[${correlationId}] ERROR: ICP refinement failed:`, error);
+    logError('ICP refinement failed', {
+      correlation_id: correlationId,
+      phase: 'error-handling',
+      error: error instanceof Error ? error.message : String(error),
+      duration_ms: durationMs,
+    });
     
     // Publish failure metrics
-    await publishMetrics(false, 0, durationMs);
+    await publishMetrics(correlationId, false, 0, durationMs);
     
     throw error;
   }
@@ -240,20 +382,31 @@ export async function handler(event: any): Promise<void> {
   const isScheduled = event.source === 'aws.events';
   const invocationType = isScheduled ? 'scheduled' : 'manual';
   
-  console.log(`[${correlationId}] Lambda invoked: ${invocationType}`);
-  console.log(`[${correlationId}] Event:`, JSON.stringify(event, null, 2));
+  logInfo('Lambda invoked', {
+    correlation_id: correlationId,
+    phase: 'lambda-invocation',
+    invocation_type: invocationType,
+  });
   
   // Extract userId from event (required parameter)
   const userId = event.userId || event.detail?.userId;
   
   if (!userId) {
+    logError('Missing userId in event payload', {
+      correlation_id: correlationId,
+      phase: 'lambda-invocation',
+    });
     throw new Error('userId is required in event payload');
   }
   
   try {
     await runICPRefinement(userId);
   } catch (error) {
-    console.error(`[${correlationId}] Lambda execution failed:`, error);
+    logError('Lambda execution failed', {
+      correlation_id: correlationId,
+      phase: 'lambda-execution',
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
 }

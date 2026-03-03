@@ -52,15 +52,19 @@ export function validateEnvironment(): void {
     'AWS_REGION',
     'KNOWLEDGE_BASE_ID',
     'NOVA_MODEL_ID',
-    'HUBSPOT_API_KEY',
-    'MIXPANEL_API_KEY',
-    'STRIPE_API_KEY',
     'ANALYSIS_TABLE_NAME',
+    'CREDENTIAL_VAULT_LAMBDA_ARN',
   ];
 
   const missing = required.filter((key) => !process.env[key]);
 
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+
+  // Validate MIN_SAMPLE_SIZE if provided
+  const minSampleSize = process.env.MIN_SAMPLE_SIZE;
+  if (minSampleSize && (isNaN(Number(minSampleSize)) || Number(minSampleSize) < 1)) {
+    throw new Error('MIN_SAMPLE_SIZE must be a positive integer');
   }
 }

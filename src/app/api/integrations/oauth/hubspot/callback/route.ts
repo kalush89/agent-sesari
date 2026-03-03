@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { handleOAuthCallback, handleOAuthError } from '../../../../../../../../packages/lambdas/credential-vault/src/handlers/hubspot-oauth';
-
+import { handleOAuthCallback, handleOAuthError } from '../../../../../../../packages/lambdas/credential-vault/src/handlers/hubspot-oauth';
 /**
  * GET /api/integrations/oauth/hubspot/callback
  * Handles OAuth callback from HubSpot and exchanges code for tokens

@@ -1,0 +1,18 @@
+# ICP Refinement Engine - Terraform Variables
+# Copy this file to terraform.tfvars and fill in your values
+
+aws_region = "us-east-1"
+
+function_name = "icp-refinement-engine"
+
+# Required: Your Bedrock Knowledge Base ID
+knowledge_base_id = "YOUR_KNOWLEDGE_BASE_ID"
+
+# Required: ARN of your credential vault Lambda function
+credential_vault_lambda_arn = "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:credential-vault"
+
+# DynamoDB table for analysis history
+analysis_table_name = "icp-analysis-history"
+
+# Minimum number of customers required for analysis
+min_sample_size = 20

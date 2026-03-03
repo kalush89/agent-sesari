@@ -29,6 +29,10 @@ All technology choices must strictly comply with AWS Free Tier limits to minimiz
 ### RAG (Retrieval-Augmented Generation)
 - **Amazon Bedrock Knowledge Bases**: Managed vector store and retrieval system
 
+### Testing
+- **Vitest**: Fast, modern test runner with native TypeScript support and ESM compatibility
+- **fast-check**: Property-based testing library for generating randomized test cases
+
 ## Critical Constraint
 
 **Strictly avoid:**

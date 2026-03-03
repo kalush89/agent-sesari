@@ -369,7 +369,7 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - _Requirements: 9.1, 9.2_
     - _Bugfix: vault-integration-data-fetching (userId extraction added)_
   
-  - [ ] 14.4 Implement CloudWatch metrics publishing
+  - [x] 14.4 Implement CloudWatch metrics publishing
     - Publish ICPAnalysisSuccess metric (1 for success, 0 for failure)
     - Publish CustomersAnalyzed metric (count)
     - Publish AnalysisDurationMs metric (execution time)
@@ -377,14 +377,14 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Publish metrics even on failure (where applicable)
     - _Requirements: 11.1_
   
-  - [ ] 14.5 Implement structured logging
+  - [x] 14.5 Implement structured logging
     - Log all operations with correlation ID for tracing
     - Use appropriate log levels: INFO, WARN, ERROR
     - Never log PII in CloudWatch
     - Include execution phase in all logs
     - _Requirements: 11.3_
   
-  - [ ] 14.6 Write integration tests for complete flow
+  - [x] 14.6 Write integration tests for complete flow
     - Test successful end-to-end analysis with mocked AWS services
     - Test graceful degradation with Mixpanel/Stripe failures
     - Test error handling for HubSpot failure
@@ -392,68 +392,82 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
     - Test checkpoint and resume logic
     - _Requirements: 10.1, 10.2, 10.3, NFR-1, NFR-3_
 
-- [ ] 15. Configure EventBridge scheduler
-  - [ ] 15.1 Create EventBridge schedule
+- [x] 15. Configure EventBridge scheduler
+  - [x] 15.1 Create EventBridge schedule
     - Create schedule with "rate(7 days)" expression
     - Configure target as ICP refinement Lambda function
     - Enable schedule by default
     - _Requirements: 9.1_
   
-  - [ ] 15.2 Document manual trigger support
+  - [x] 15.2 Document manual trigger support
     - Document how to invoke Lambda manually via AWS console
     - Document how to invoke Lambda via AWS CLI
     - Document event payload format for manual invocations
     - _Requirements: 9.2_
   
-  - [ ] 15.3 Write deployment script or CDK/Terraform config
+  - [x] 15.3 Write deployment script or CDK/Terraform config
     - Create infrastructure-as-code for EventBridge schedule
     - Include Lambda function configuration (memory, timeout, environment variables)
     - Include IAM role with required permissions
     - _Requirements: 9.1, NFR-4_
 
-- [ ] 16. Configure environment and IAM
-  - [ ] 16.1 Create environment configuration
+- [x] 16. Configure environment and IAM
+  - [x] 16.1 Create environment configuration
     - Document required environment variables (AWS_REGION, KNOWLEDGE_BASE_ID, NOVA_MODEL_ID, ANALYSIS_TABLE_NAME, MIN_SAMPLE_SIZE, CREDENTIAL_VAULT_LAMBDA_ARN)
     - Add environment variable validation at startup
     - Create `.env.example` file with placeholder values
     - _Requirements: NFR-4_
-    - _Note: API keys (HUBSPOT_API_KEY, MIXPANEL_API_KEY, STRIPE_API_KEY) are now managed by credential vault, not environment variables_
+    - _Bugfix: vault-integration-data-fetching - Removed HUBSPOT_API_KEY, MIXPANEL_API_KEY, STRIPE_API_KEY from environment variables (now managed by credential vault)_
   
-  - [ ] 16.2 Configure credential vault integration
-    - Document that API credentials are retrieved from credential vault Lambda
-    - Document userId requirement for credential retrieval
-    - Document credential vault Lambda ARN configuration
-    - Document error handling for service not connected scenarios
+  - [x] 16.2 Configure credential vault integration
+    - Document that API credentials are retrieved from credential vault Lambda via getServiceCredentials(userId, serviceName)
+    - Document userId requirement for credential retrieval (must be passed to all data fetching functions)
+    - Document credential vault Lambda ARN configuration in environment variables
+    - Document service-specific authentication patterns:
+      - HubSpot: OAuth 2.0 with automatic token refresh (Bearer token)
+      - Mixpanel: Service account credentials with Basic auth (Base64-encoded username:secret)
+      - Stripe: Encrypted API keys with Bearer token
+    - Document error handling for service not connected scenarios (throw descriptive error)
+    - Document that credentials are decrypted in-memory and never stored in environment variables
     - _Requirements: NFR-4_
-    - _Bugfix: vault-integration-data-fetching (replaces AWS Secrets Manager integration)_
+    - _Bugfix: vault-integration-data-fetching - Replaces direct environment variable access with secure credential vault integration_
   
-  - [ ] 16.3 Create IAM policy
+  - [x] 16.3 Create IAM policy
     - Document required IAM permissions for Lambda execution role
     - Include: bedrock:InvokeModel, bedrock:Retrieve, bedrock:UpdateKnowledgeBase
-    - Include: dynamodb:PutItem, dynamodb:GetItem
+    - Include: dynamodb:PutItem, dynamodb:GetItem, dynamodb:Query
     - Include: logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents
     - Include: lambda:InvokeFunction (for credential vault Lambda invocation)
+    - Include: cloudwatch:PutMetricData (for custom metrics)
     - Create example IAM policy JSON
     - _Requirements: NFR-4_
-    - _Bugfix: vault-integration-data-fetching (added lambda:InvokeFunction permission)_
+    - _Bugfix: vault-integration-data-fetching - Added lambda:InvokeFunction permission for credential vault integration_
+  
+  - [x] 16.4 Document credential vault prerequisites
+    - Document that credential vault Lambda must be deployed before ICP refinement engine
+    - Document that users must connect services (HubSpot OAuth, Mixpanel, Stripe) via integration UI
+    - Document credential vault DynamoDB table requirements (encrypted with KMS)
+    - Document that HubSpot OAuth tokens are automatically refreshed by credential vault
+    - Document troubleshooting steps for "service not connected" errors
+    - _Bugfix: vault-integration-data-fetching - New documentation for credential vault dependencies_
 
-- [ ] 17. Configure CloudWatch alarms
-  - [ ] 17.1 Create alarm for analysis failures
+- [-] 17. Configure CloudWatch alarms
+  - [x] 17.1 Create alarm for analysis failures
     - Create alarm for 2 consecutive analysis failures
     - Configure SNS notification
     - _Requirements: 11.2_
   
-  - [ ] 17.2 Create alarm for low confidence
+  - [-] 17.2 Create alarm for low confidence
     - Create alarm for confidence score < 50
     - Configure SNS notification
     - _Requirements: 11.2_
   
-  - [ ] 17.3 Create alarm for insufficient sample size
+  - [x] 17.3 Create alarm for insufficient sample size
     - Create alarm for sample size below minimum
     - Configure SNS notification
     - _Requirements: 11.2_
 
-- [ ] 18. Final checkpoint - Ensure all tests pass and system is deployable
+- [x] 18. Final checkpoint - Ensure all tests pass and system is deployable
   - Run all unit tests and property tests
   - Run integration tests with mocked AWS services
   - Verify error handling works correctly
@@ -462,20 +476,20 @@ This implementation plan breaks down the Dynamic ICP Refinement Engine into disc
   - Test manual Lambda invocation
   - Ensure all tests pass, ask the user if questions arise
 
-- [ ] 19. Deploy and validate
-  - [ ] 19.1 Deploy Lambda function to AWS
+- [x] 19. Deploy and validate
+  - [x] 19.1 Deploy Lambda function to AWS
     - Package Lambda function with dependencies
     - Deploy to AWS using deployment script or CDK/Terraform
     - Verify Lambda configuration (memory, timeout, environment variables)
     - _Requirements: NFR-1, NFR-2_
   
-  - [ ] 19.2 Deploy EventBridge schedule
+  - [x] 19.2 Deploy EventBridge schedule
     - Create EventBridge schedule in AWS
     - Verify schedule is enabled
     - Verify target Lambda function is correct
     - _Requirements: 9.1_
   
-  - [ ] 19.3 Manual testing checklist
+  - [x] 19.3 Manual testing checklist
     - Invoke Lambda manually and verify successful execution
     - Monitor Lambda execution time (must stay under 15 minutes)
     - Verify Knowledge Base updates appear in Bedrock console
