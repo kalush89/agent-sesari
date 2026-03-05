@@ -1,26 +1,47 @@
 @import "tailwindcss";
 
+/* Sesari Light Theme (Default) */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #FAFAFA;
+  --card: #FFFFFF;
+  --primary: #1A1A1A;
+  --muted: #6B7280;
+  --border: #E5E7EB;
+  --growth: #00C853;
+  --growth-hover: #00A844;
+  --alert: #FF3D00;
+  --agent: #6B46C1;
+}
+
+/* Sesari Dark Theme */
+.dark {
+  --background: #0F0F0F;
+  --card: #1A1A1A;
+  --primary: #F5F5F5;
+  --muted: #9CA3AF;
+  --border: #2D2D2D;
+  --growth: #00C853;
+  --growth-hover: #00A844;
+  --alert: #FF3D00;
+  --agent: #8B5CF6;
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-primary: var(--primary);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-growth: var(--growth);
+  --color-growth-hover: var(--growth-hover);
+  --color-alert: var(--alert);
+  --color-agent: var(--agent);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  color: var(--primary);
+  font-family: 'Inter', 'Geist', system-ui, sans-serif;
 }
