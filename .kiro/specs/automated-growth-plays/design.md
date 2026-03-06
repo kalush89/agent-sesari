@@ -30,22 +30,27 @@ The system follows an event-driven, serverless architecture with clear separatio
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Signal Orchestrator Lambda                     │
-│              (Coordinates signal collection)                     │
-└─────┬──────────────┬──────────────┬────────────────────────┬────┘
-      │              │              │                        │
-      ▼              ▼              ▼                        ▼
-┌──────────┐  ┌──────────┐  ┌──────────┐           ┌──────────────┐
-│ Mixpanel │  │ HubSpot  │  │  Stripe  │           │ DynamoDB     │
-│Connector │  │Connector │  │Connector │           │ (Cache)      │
-│ Lambda   │  │ Lambda   │  │ Lambda   │           └──────────────┘
-└────┬─────┘  └────┬─────┘  └────┬─────┘
-     │             │             │
-     └─────────────┴─────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────────────────────┐
+│         (Queries UniversalSignals, groups by entity)             │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │  UniversalSignals│
+                    │  DynamoDB Table  │◄─────────────────┐
+                    │ (Signal-Translator│                  │
+                    │   populates this) │                  │
+                    └──────────┬────────┘                  │
+                               │                           │
+                               │                           │
+                    ┌──────────▼────────┐                  │
+                    │  SignalCache      │                  │
+                    │  (1-hour TTL)     │                  │
+                    └──────────┬────────┘                  │
+                               │                           │
+                               ▼                           │
+┌─────────────────────────────────────────────────────────┴───────┐
 │                   Signal Correlator Lambda                       │
-│         (Combines signals, calculates risk scores)               │
+│         (Analyzes signals, calculates risk scores)               │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
@@ -73,16 +78,19 @@ The system follows an event-driven, serverless architecture with clear separatio
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Note**: Platform connectors (Stripe, HubSpot, Mixpanel) and the Signal Translator are part of the Universal Signal Schema feature. They continuously populate the UniversalSignals table, which Growth Plays queries for risk analysis.
+
 ### Component Responsibilities
 
 **Signal Orchestrator Lambda**
 - Triggered by EventBridge on a daily schedule
-- Invokes all Signal Connectors in parallel
-- Aggregates responses and passes to Signal Correlator
-- Implements 1-hour caching to reduce redundant API calls
+- Queries UniversalSignals table (populated by Signal Translator)
+- Groups signals by entity to create customer profiles
+- Implements 1-hour caching to reduce redundant queries
+- **Does NOT invoke connectors** - relies on Signal Translator for data
 
 **Signal Correlator Lambda**
-- Receives unified customer data from Signal Orchestrator
+- Receives grouped signal data from Signal Orchestrator
 - Calculates risk scores (0-100) based on signal patterns
 - Identifies high-risk customers (score > 70)
 - Stores risk profiles and intermediate calculations in DynamoDB
@@ -109,45 +117,70 @@ The system follows an event-driven, serverless architecture with clear separatio
 
 ### Signal Orchestrator
 
-**Purpose**: Coordinate parallel signal collection and implement caching strategy
+**Purpose**: Query UniversalSignals table and group signals by entity for risk analysis
 
 **Interface**:
 ```typescript
 interface SignalOrchestratorInput {
   forceRefresh?: boolean; // Override cache
+  timeRangeHours?: number; // Default: 720 (30 days)
 }
 
 interface SignalOrchestratorOutput {
-  customers: UnifiedCustomerProfile[];
+  entityProfiles: EntitySignalProfile[];
   cacheHit: boolean;
   timestamp: string;
 }
 
-interface UnifiedCustomerProfile {
-  customerId: string;
+interface EntitySignalProfile {
+  entityId: string; // Primary key from UniversalSignals
   email: string;
-  companyName: string;
-  mixpanelData: MixpanelSignals;
-  hubspotData: HubSpotSignals;
-  stripeData: StripeSignals;
+  signals: {
+    revenue: Universal_Signal[];
+    relationship: Universal_Signal[];
+    behavioral: Universal_Signal[];
+  };
+  platformIds: {
+    stripe?: string;
+    hubspot?: string;
+    mixpanel?: string;
+  };
+}
+
+interface Universal_Signal {
+  signalId: string;
+  category: 'revenue' | 'relationship' | 'behavioral';
+  eventType: string;
+  occurredAt: number;
+  impact: {
+    severity: 'critical' | 'high' | 'medium' | 'low';
+    metrics: Record<string, any>;
+  };
+  platformDetails: Record<string, any>;
 }
 ```
 
 **Key Functions**:
 - `orchestrateSignalCollection()`: Main handler
 - `checkCache()`: Retrieve cached profiles if < 1 hour old
-- `invokeConnectorsInParallel()`: Batch invoke all Signal Connectors
-- `mergeSignalsByCustomerId()`: Combine responses into unified profiles
-- `cacheProfiles()`: Store profiles in DynamoDB with TTL
+- `queryUniversalSignals()`: Query UniversalSignals table by time range
+- `groupSignalsByEntity()`: Group signals by entity.primaryKey
+- `cacheProfiles()`: Store profiles in SignalCache with TTL
+
+**Implementation Notes**:
+- Queries UniversalSignals table using GSI2 (CategoryIndex) for each category
+- Combines results and groups by entity.primaryKey
+- Does NOT invoke Lambda connectors - relies on Signal Translator
+- Caching reduces DynamoDB read costs and improves performance
 
 ### Signal Correlator
 
-**Purpose**: Analyze unified customer profiles and calculate risk scores
+**Purpose**: Analyze entity signal profiles and calculate risk scores
 
 **Interface**:
 ```typescript
 interface SignalCorrelatorInput {
-  customers: UnifiedCustomerProfile[];
+  entityProfiles: EntitySignalProfile[];
 }
 
 interface SignalCorrelatorOutput {
@@ -156,7 +189,8 @@ interface SignalCorrelatorOutput {
 }
 
 interface RiskProfile {
-  customerId: string;
+  entityId: string;
+  email: string;
   riskScore: number; // 0-100
   riskFactors: RiskFactor[];
   detectedAt: string;
@@ -167,13 +201,14 @@ interface RiskFactor {
   severity: number; // 0-100
   signalValues: Record<string, any>; // Raw signal data for audit
   weight: number; // Contribution to overall risk score
+  sourceSignals: string[]; // signalIds from UniversalSignals
 }
 ```
 
 **Key Functions**:
 - `calculateRiskScore()`: Main risk calculation algorithm
-- `detectUsageDecline()`: Analyze Mixpanel usage trends
-- `checkRenewalProximity()`: Identify upcoming renewals from Stripe
+- `detectUsageDecline()`: Analyze behavioral signals for usage trends
+- `checkRenewalProximity()`: Identify upcoming renewals from revenue signals
 - `aggregateRiskFactors()`: Combine factors into overall score
 - `storeRiskProfile()`: Persist to DynamoDB with audit data
 
@@ -187,18 +222,24 @@ riskScore = (
   paymentIssueSeverity * 0.1
 )
 
-// Usage decline severity
+// Usage decline severity (from behavioral signals)
 if (usageDecline > 50%) severity = 100
 else if (usageDecline > 30%) severity = 70
 else if (usageDecline > 10%) severity = 40
 else severity = 0
 
-// Renewal proximity severity
+// Renewal proximity severity (from revenue signals)
 if (daysUntilRenewal <= 7) severity = 100
 else if (daysUntilRenewal <= 14) severity = 80
 else if (daysUntilRenewal <= 30) severity = 50
 else severity = 0
 ```
+
+**Implementation Notes**:
+- Processes EntitySignalProfile objects from Signal Orchestrator
+- Extracts metrics from Universal_Signal.impact.metrics
+- Uses Universal_Signal.platformDetails for platform-specific analysis
+- References sourceSignals (signalIds) for full audit trail
 
 ### Draft Generator
 
@@ -208,7 +249,7 @@ else severity = 0
 ```typescript
 interface DraftGeneratorInput {
   riskProfile: RiskProfile;
-  customerProfile: UnifiedCustomerProfile;
+  entityProfile: EntitySignalProfile;
   communicationType: 'email' | 'slack';
 }
 
@@ -218,7 +259,7 @@ interface DraftGeneratorOutput {
 
 interface GrowthPlay {
   id: string;
-  customerId: string;
+  entityId: string;
   customerName: string;
   companyName: string;
   riskScore: number;
@@ -226,7 +267,7 @@ interface GrowthPlay {
   subject?: string; // For email only
   draftContent: string;
   thoughtTrace: ThoughtTrace;
-  status: 'pending' | 'approved' | 'dismissed' | 'executed' | 'failed';
+  status: 'pending' | 'approved' | 'dismissed' | 'executed' | 'failed' | 'resolved';
   createdAt: string;
   updatedAt: string;
   auditTrail: AuditEntry[];
@@ -235,11 +276,12 @@ interface GrowthPlay {
 interface ThoughtTrace {
   riskFactors: RiskFactor[];
   reasoning: string; // Natural language explanation
-  signalSources: string[]; // e.g., ["Mixpanel", "Stripe"]
+  signalSources: string[]; // e.g., ["revenue.payment_failed", "behavioral.inactivity"]
+  sourceSignalIds: string[]; // signalIds from UniversalSignals for traceability
 }
 
 interface AuditEntry {
-  action: 'created' | 'approved' | 'dismissed' | 'edited' | 'executed' | 'failed';
+  action: 'created' | 'approved' | 'dismissed' | 'edited' | 'executed' | 'failed' | 'resolved';
   timestamp: string;
   userId?: string;
   metadata?: Record<string, any>;
@@ -251,7 +293,7 @@ interface AuditEntry {
 - `buildBedrockPrompt()`: Construct prompt with customer context
 - `invokeBedrockNovaLite()`: Call Bedrock API
 - `formatDraft()`: Apply word limits and formatting
-- `createThoughtTrace()`: Generate explainability section
+- `createThoughtTrace()`: Generate explainability section with signal references
 - `storeGrowthPlay()`: Persist to DynamoDB
 
 **Bedrock Prompt Template**:
@@ -280,6 +322,11 @@ Constraints:
 
 Output format: Plain text only, no markdown.
 ```
+
+**Implementation Notes**:
+- Uses EntitySignalProfile to extract customer name and company from platformDetails
+- References Universal_Signal data in thoughtTrace for full explainability
+- Stores sourceSignalIds for audit trail linking back to UniversalSignals table
 
 ### Growth Play Parser and Serializer
 
@@ -421,15 +468,15 @@ interface GetAuditTrailResponse {
 **Table: GrowthPlays**
 - **Partition Key**: `id` (String) - UUID
 - **Sort Key**: None
-- **GSI 1**: `customerId-createdAt-index`
-  - Partition Key: `customerId`
+- **GSI 1**: `entityId-createdAt-index`
+  - Partition Key: `entityId`
   - Sort Key: `createdAt`
 - **GSI 2**: `status-createdAt-index`
   - Partition Key: `status`
   - Sort Key: `createdAt`
 - **Attributes**:
   - `id`: String (UUID)
-  - `customerId`: String
+  - `entityId`: String (from UniversalSignals entity.primaryKey)
   - `customerName`: String
   - `companyName`: String
   - `riskScore`: Number
@@ -437,7 +484,7 @@ interface GetAuditTrailResponse {
   - `subject`: String (optional, email only)
   - `draftContent`: String
   - `editedContent`: String (optional)
-  - `thoughtTrace`: Map
+  - `thoughtTrace`: Map (includes sourceSignalIds for traceability)
   - `status`: String
   - `createdAt`: String (ISO 8601)
   - `updatedAt`: String (ISO 8601)
@@ -445,33 +492,37 @@ interface GetAuditTrailResponse {
   - `executionMetadata`: Map (optional)
 
 **Table: CustomerRiskProfiles**
-- **Partition Key**: `customerId` (String)
+- **Partition Key**: `entityId` (String) - from UniversalSignals
 - **Sort Key**: `detectedAt` (String) - ISO 8601 timestamp
 - **TTL Attribute**: `expiresAt` (Number) - Unix timestamp (90 days retention)
 - **Attributes**:
-  - `customerId`: String
+  - `entityId`: String
+  - `email`: String
   - `riskScore`: Number
-  - `riskFactors`: List
+  - `riskFactors`: List (includes sourceSignalIds)
   - `signalValues`: Map (raw data for audit)
   - `detectedAt`: String (ISO 8601)
   - `expiresAt`: Number (Unix timestamp)
 
 **Table: SignalCache**
-- **Partition Key**: `cacheKey` (String) - "unified-profiles"
+- **Partition Key**: `cacheKey` (String) - "entity-profiles"
 - **TTL Attribute**: `expiresAt` (Number) - Unix timestamp (1 hour)
 - **Attributes**:
   - `cacheKey`: String
-  - `profiles`: List
+  - `profiles`: List (EntitySignalProfile objects)
   - `cachedAt`: String (ISO 8601)
   - `expiresAt`: Number (Unix timestamp)
 
+**Note**: The UniversalSignals and EntityMappings tables are owned by the Universal Signal Schema feature and are queried (read-only) by Growth Plays.
+
 ### Data Flow
 
-1. **Signal Collection**: EventBridge → Signal Orchestrator → Signal Connectors → DynamoDB (SignalCache)
-2. **Risk Detection**: Signal Orchestrator → Signal Correlator → DynamoDB (CustomerRiskProfiles)
-3. **Draft Generation**: Signal Correlator → Draft Generator → Bedrock Nova Lite → DynamoDB (GrowthPlays)
-4. **User Approval**: Next.js Dashboard → API Route → DynamoDB (GrowthPlays update)
-5. **Execution**: API Route → Execution Engine → AWS SES/Slack API → DynamoDB (GrowthPlays audit trail)
+1. **Signal Collection** (handled by Universal Signal Schema feature): Platform Connectors → Signal Translator → DynamoDB (UniversalSignals)
+2. **Signal Aggregation**: EventBridge → Signal Orchestrator → Query UniversalSignals → DynamoDB (SignalCache)
+3. **Risk Detection**: Signal Orchestrator → Signal Correlator → DynamoDB (CustomerRiskProfiles)
+4. **Draft Generation**: Signal Correlator → Draft Generator → Bedrock Nova Lite → DynamoDB (GrowthPlays)
+5. **User Approval**: Next.js Dashboard → API Route → DynamoDB (GrowthPlays update)
+6. **Execution**: API Route → Execution Engine → AWS SES/Slack API → DynamoDB (GrowthPlays audit trail)
 
 
 ## Correctness Properties
@@ -609,11 +660,11 @@ After analyzing all acceptance criteria, I identified several areas of redundanc
 
 **Validates: Requirements 6.5, 6.6**
 
-### Property 21: Signal Connector Batching
+### Property 21: Signal Grouping by Entity
 
-*For any* signal collection cycle triggered by the Signal Orchestrator, all Signal Connectors (Mixpanel, HubSpot, Stripe) must be invoked in parallel within a single orchestration execution, not sequentially.
+*For any* signal collection cycle triggered by the Signal Orchestrator, all Universal_Signals retrieved from the UniversalSignals table must be grouped by entity.primaryKey, and each entity must have all its signals (revenue, relationship, behavioral) included in its EntitySignalProfile.
 
-**Validates: Requirements 7.4**
+**Validates: Requirements 1.1, 7.4**
 
 ### Property 22: Cache Hit Within TTL
 

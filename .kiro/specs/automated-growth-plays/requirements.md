@@ -7,11 +7,12 @@ The Automated Growth Plays feature enables Sesari to proactively detect at-risk 
 ## Glossary
 
 - **Growth_Play**: A system-generated, actionable recommendation consisting of a risk insight and a drafted communication (email or Slack message) ready for user approval
-- **Signal_Correlator**: The component that combines behavioral, relationship, and revenue data to detect at-risk customer patterns
+- **Signal_Correlator**: The component that analyzes Universal_Signals to detect at-risk customer patterns
 - **Risk_Pattern**: A specific combination of signals that indicates potential customer churn (e.g., low usage + upcoming renewal)
 - **Draft_Generator**: The component that creates context-aware email or Slack message drafts using Amazon Bedrock
 - **Approval_Workflow**: The user interface and backend process for reviewing and executing Growth Plays
-- **Signal_Connector**: Lambda functions that retrieve data from integrated platforms (Mixpanel, HubSpot, Stripe)
+- **Universal_Signal**: Normalized signal format from the Universal Signal Schema feature (revenue, relationship, behavioral)
+- **Signal_Orchestrator**: The component that queries UniversalSignals table and groups signals by entity
 - **Execution_Engine**: The component that sends approved communications via email or Slack
 
 ## Requirements
@@ -22,12 +23,12 @@ The Automated Growth Plays feature enables Sesari to proactively detect at-risk 
 
 #### Acceptance Criteria
 
-1. WHEN Signal_Connectors retrieve data from Mixpanel, HubSpot, and Stripe, THE Signal_Correlator SHALL combine the data into a unified customer risk profile
-2. THE Signal_Correlator SHALL identify customers with usage decline greater than 50% over the last 30 days
-3. THE Signal_Correlator SHALL identify customers with contract renewals within 30 days
+1. WHEN the Signal_Orchestrator queries UniversalSignals table, THE System SHALL group signals by entity to create customer profiles
+2. THE Signal_Correlator SHALL identify customers with usage decline greater than 50% over the last 30 days from behavioral signals
+3. THE Signal_Correlator SHALL identify customers with contract renewals within 30 days from revenue signals
 4. WHEN a customer has both usage decline and upcoming renewal, THE Signal_Correlator SHALL flag the customer as high-risk
 5. THE Signal_Correlator SHALL calculate a risk score between 0 and 100 for each customer based on signal strength
-6. FOR ALL risk calculations, THE Signal_Correlator SHALL store intermediate signal values and the final risk score for auditability
+6. FOR ALL risk calculations, THE Signal_Correlator SHALL store intermediate signal values and reference sourceSignalIds for auditability
 
 ### Requirement 2: Proactive Risk Detection
 
@@ -101,8 +102,8 @@ The Automated Growth Plays feature enables Sesari to proactively detect at-risk 
 1. THE System SHALL use AWS Lambda for all compute operations to avoid always-on EC2 costs
 2. THE System SHALL use Amazon Bedrock Nova Lite for draft generation to minimize token costs
 3. THE System SHALL use DynamoDB for Growth_Play storage with on-demand billing to scale to zero when idle
-4. THE System SHALL batch Signal_Connector invocations to minimize Lambda execution count
-5. THE System SHALL cache customer risk profiles for 1 hour to reduce redundant API calls to integrated platforms
+4. THE System SHALL query UniversalSignals table (populated by Signal Translator) instead of invoking connector Lambdas to minimize execution count
+5. THE System SHALL cache entity signal profiles for 1 hour to reduce redundant DynamoDB queries
 6. THE System SHALL optimize Lambda memory allocation to complete executions within 512MB to stay within free tier limits
 
 ### Requirement 8: Audit Trail and Explainability

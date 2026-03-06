@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB tables for Automated Growth Plays feature'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+    Description: Environment name
+
+Resources:
+  # GrowthPlays Table
+  GrowthPlaysTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'GrowthPlays-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: customerId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: customerId-createdAt-index
+          KeySchema:
+            - AttributeName: customerId
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: status-createdAt-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # CustomerRiskProfiles Table
+  CustomerRiskProfilesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'CustomerRiskProfiles-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: customerId
+          AttributeType: S
+        - AttributeName: detectedAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: customerId
+          KeyType: HASH
+        - AttributeName: detectedAt
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  # SignalCache Table
+  SignalCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'SignalCache-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: cacheKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cacheKey
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+Outputs:
+  GrowthPlaysTableName:
+    Description: DynamoDB table for Growth Plays
+    Value: !Ref GrowthPlaysTable
+    Export:
+      Name: !Sub '${AWS::StackName}-GrowthPlaysTable'
+
+  CustomerRiskProfilesTableName:
+    Description: DynamoDB table for Customer Risk Profiles
+    Value: !Ref CustomerRiskProfilesTable
+    Export:
+      Name: !Sub '${AWS::StackName}-CustomerRiskProfilesTable'
+
+  SignalCacheTableName:
+    Description: DynamoDB table for Signal Cache
+    Value: !Ref SignalCacheTable
+    Export:
+      Name: !Sub '${AWS::StackName}-SignalCacheTable'
